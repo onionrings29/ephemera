@@ -31,6 +31,8 @@ function SetupWizard() {
 
   // Step 1: System Configuration
   const [step1, setStep1] = useState({
+    baseUrl: typeof window !== "undefined" ? window.location.origin : "http://localhost:8286",
+    allowedOrigins: "",
     searcherBaseUrl: "",
     searcherApiKey: "",
     quickBaseUrl: "",
@@ -48,6 +50,10 @@ function SetupWizard() {
 
   // Validation
   const validateStep1 = () => {
+    if (!step1.baseUrl) {
+      setError("Application Base URL is required");
+      return false;
+    }
     if (!step1.searcherBaseUrl) {
       setError("Searcher Base URL is required");
       return false;
@@ -198,6 +204,27 @@ function SetupWizard() {
                 icon={<IconSettings size={18} />}
               >
                 <Stack gap="md" mt="md">
+                  <TextInput
+                    label="Application Base URL"
+                    placeholder="https://ephemera.yourdomain.com"
+                    description="The URL where this application is accessed (auto-detected)"
+                    required
+                    value={step1.baseUrl}
+                    onChange={(e) =>
+                      setStep1({ ...step1, baseUrl: e.target.value })
+                    }
+                  />
+
+                  <TextInput
+                    label="Additional Allowed Origins (Optional)"
+                    placeholder="https://app.example.com,https://admin.example.com"
+                    description="Comma-separated list of additional domains allowed to access the API"
+                    value={step1.allowedOrigins}
+                    onChange={(e) =>
+                      setStep1({ ...step1, allowedOrigins: e.target.value })
+                    }
+                  />
+
                   <TextInput
                     label="Searcher Base URL"
                     placeholder="https://annas-archive.org"
