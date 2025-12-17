@@ -3,7 +3,6 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { swaggerUI } from "@hono/swagger-ui";
-import { cors } from "hono/cors";
 import { logger as honoLogger } from "hono/logger";
 import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
@@ -132,7 +131,10 @@ app.use("*", async (c, next) => {
   }
 
   c.header("Access-Control-Allow-Credentials", "true");
-  c.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+  c.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+  );
   c.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   // Handle preflight requests
@@ -216,6 +218,7 @@ app.use("/api/oidc-providers", async (c, next) => {
 });
 
 // Protect setup endpoints - only allow access when setup is not complete
+// OR when BASE_URL needs reconfiguration
 app.use("/api/setup/*", async (c, next) => {
   // Allow /setup/status to be checked always
   if (c.req.path === "/api/setup/status") {
@@ -232,10 +235,24 @@ app.use("/api/setup/*", async (c, next) => {
     });
 
     if (config?.isSetupComplete) {
+      // Allow BASE_URL reconfiguration if it's not set or is localhost
+      const baseUrl = config.baseUrl || "";
+      const needsReconfiguration =
+        !baseUrl ||
+        baseUrl.includes("localhost") ||
+        baseUrl.includes("127.0.0.1");
+
+      // Allow step1 (BASE_URL configuration) if reconfiguration is needed
+      if (c.req.path === "/api/setup/step1" && needsReconfiguration) {
+        return next();
+      }
+
+      // Block all other setup endpoints after setup is complete
       return c.json(
         {
           error: "Setup already complete",
-          message: "Initial setup has already been completed. Use the settings page to modify configuration.",
+          message:
+            "Initial setup has already been completed. Use the settings page to modify configuration.",
         },
         403,
       );
