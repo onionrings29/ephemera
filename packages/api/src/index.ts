@@ -8,7 +8,7 @@ import { logger as honoLogger } from "hono/logger";
 import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { initializeDatabase } from "./db/index.js";
+import { initializeDatabase, db } from "./db/index.js";
 import { logger } from "./utils/logger.js";
 import { auth } from "./auth.js";
 import { requireAuth, requireAdmin } from "./middleware/auth.js";
@@ -137,7 +137,7 @@ app.use("*", async (c, next) => {
 
   // Handle preflight requests
   if (c.req.method === "OPTIONS") {
-    return c.text("", 204);
+    return c.body(null, 204);
   }
 
   await next();
