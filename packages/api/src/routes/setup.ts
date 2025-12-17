@@ -12,6 +12,8 @@ const SetupStatusSchema = z.object({
 
 // Schema for step 1: System configuration
 const Step1Schema = z.object({
+  baseUrl: z.string().url(),
+  allowedOrigins: z.string().optional(), // Comma-separated list of additional origins
   searcherBaseUrl: z.string().url(),
   searcherApiKey: z.string().optional(),
   quickBaseUrl: z.string().url().or(z.literal("")).optional(),
@@ -110,6 +112,8 @@ app.openapi(postStep1Route, async (c) => {
       await db
         .update(appConfig)
         .set({
+          baseUrl: body.baseUrl,
+          allowedOrigins: body.allowedOrigins || null,
           searcherBaseUrl: body.searcherBaseUrl,
           searcherApiKey: body.searcherApiKey || null,
           quickBaseUrl:
@@ -127,6 +131,8 @@ app.openapi(postStep1Route, async (c) => {
         id: 1,
         isSetupComplete: false,
         authMethod: null, // Auth methods are configured in Settings, not during setup
+        baseUrl: body.baseUrl,
+        allowedOrigins: body.allowedOrigins || null,
         searcherBaseUrl: body.searcherBaseUrl,
         searcherApiKey: body.searcherApiKey || null,
         quickBaseUrl:

@@ -176,10 +176,57 @@ app.openapi(createProviderRoute, async (c) => {
       return c.json({ error: "Provider ID already exists" }, 400);
     }
 
+    // Validate discovery URL to prevent SSRF attacks
+    try {
+      const url = new URL(body.discoveryUrl);
+
+      // Only allow HTTPS for security
+      if (url.protocol !== 'https:') {
+        return c.json(
+          {
+            error: "Discovery URL must use HTTPS protocol",
+          },
+          400,
+        );
+      }
+
+      // Block private IP ranges and localhost to prevent SSRF
+      const hostname = url.hostname.toLowerCase();
+      const privatePatterns = [
+        /^localhost$/i,
+        /^127\./,
+        /^10\./,
+        /^172\.(1[6-9]|2\d|3[01])\./,
+        /^192\.168\./,
+        /^169\.254\./, // Link-local
+        /^::1$/, // IPv6 localhost
+        /^fe80:/i, // IPv6 link-local
+        /^fc00:/i, // IPv6 private
+      ];
+
+      if (privatePatterns.some(pattern => pattern.test(hostname))) {
+        return c.json(
+          {
+            error: "Discovery URL cannot point to private IP addresses or localhost",
+          },
+          400,
+        );
+      }
+    } catch (error) {
+      return c.json(
+        {
+          error: "Invalid discovery URL format",
+        },
+        400,
+      );
+    }
+
     // Fetch discovery document to get required endpoints
     let discoveryDoc;
     try {
-      const discoveryResponse = await fetch(body.discoveryUrl);
+      const discoveryResponse = await fetch(body.discoveryUrl, {
+        signal: AbortSignal.timeout(10000), // 10 second timeout
+      });
       if (!discoveryResponse.ok) {
         return c.json(
           {

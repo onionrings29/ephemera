@@ -129,6 +129,8 @@ export const appConfig = sqliteTable("app_config", {
     .notNull()
     .default(false),
   authMethod: text("auth_method"),
+  baseUrl: text("base_url"), // Application base URL for CORS and authentication
+  allowedOrigins: text("allowed_origins"), // Comma-separated list of additional allowed origins
   searcherBaseUrl: text("searcher_base_url"),
   searcherApiKey: text("searcher_api_key"),
   quickBaseUrl: text("quick_base_url"),

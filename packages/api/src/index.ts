@@ -115,23 +115,33 @@ app.use("*", async (c, next) => {
 });
 
 // CORS configuration - allow credentials from frontend dev server and production
-app.use(
-  "*",
-  cors({
-    origin: (origin) => {
-      // Allow requests from Vite dev server and production origin
-      const allowedOrigins = [
-        "http://localhost:5222", // Vite dev server (primary)
-        "http://localhost:5223", // Vite dev server (backup port)
-        "http://localhost:8286", // Production (same origin)
-      ];
-      return allowedOrigins.includes(origin) ? origin : "http://localhost:8286";
-    },
-    credentials: true,
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
-  }),
-);
+// Uses dynamic configuration from database (via setup wizard) or environment variables
+app.use("*", async (c, next) => {
+  const { getRuntimeConfig } = await import("./config.js");
+  const runtimeConfig = await getRuntimeConfig();
+
+  const origin = c.req.header("origin");
+  const allowedOrigins = runtimeConfig.allowedOrigins;
+
+  // Check if origin is allowed
+  if (origin && allowedOrigins.includes(origin)) {
+    c.header("Access-Control-Allow-Origin", origin);
+  } else if (allowedOrigins.length > 0) {
+    // Fallback to first allowed origin (usually BASE_URL)
+    c.header("Access-Control-Allow-Origin", allowedOrigins[0]);
+  }
+
+  c.header("Access-Control-Allow-Credentials", "true");
+  c.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+  c.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  // Handle preflight requests
+  if (c.req.method === "OPTIONS") {
+    return c.text("", 204);
+  }
+
+  await next();
+});
 
 // Error handling middleware
 app.onError((err, c) => {
@@ -205,8 +215,42 @@ app.use("/api/oidc-providers", async (c, next) => {
   });
 });
 
+// Protect setup endpoints - only allow access when setup is not complete
+app.use("/api/setup/*", async (c, next) => {
+  // Allow /setup/status to be checked always
+  if (c.req.path === "/api/setup/status") {
+    return next();
+  }
+
+  // For all other setup endpoints, check if setup is already complete
+  try {
+    const { appConfig } = await import("./db/schema.js");
+    const { eq } = await import("drizzle-orm");
+
+    const config = await db.query.appConfig.findFirst({
+      where: eq(appConfig.id, 1),
+    });
+
+    if (config?.isSetupComplete) {
+      return c.json(
+        {
+          error: "Setup already complete",
+          message: "Initial setup has already been completed. Use the settings page to modify configuration.",
+        },
+        403,
+      );
+    }
+
+    await next();
+  } catch (error) {
+    console.error("[Setup Protection] Error:", error);
+    // Allow setup to proceed if database check fails (might be initial setup)
+    await next();
+  }
+});
+
 // Mount API routes
-app.route("/api/setup", setupRoutes); // Public (for initial setup)
+app.route("/api/setup", setupRoutes); // Protected (only accessible during initial setup)
 app.route("/api/auth", authRoutes); // Public (for login page)
 app.route("/api", searchRoutes); // Public for now
 app.route("/api", downloadRoutes); // Protected (middleware applied above)
