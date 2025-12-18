@@ -71,6 +71,7 @@ function LoginPage() {
         // Load available auth methods
         try {
           const methods = await apiFetch<AuthMethods>("/auth/methods");
+          console.log("[Login] Auth methods:", methods);
           setAuthMethods(methods);
         } catch (err) {
           console.warn("Could not load auth methods:", err);
@@ -86,8 +87,11 @@ function LoginPage() {
         // Load OIDC providers (public endpoint, no auth needed)
         try {
           const providers = await apiFetch<OIDCProvider[]>("/oidc-providers");
+          console.log("[Login] All OIDC providers:", providers);
           // Only show enabled providers
-          setOidcProviders(providers.filter((p) => p.enabled));
+          const enabledProviders = providers.filter((p) => p.enabled);
+          console.log("[Login] Enabled OIDC providers:", enabledProviders);
+          setOidcProviders(enabledProviders);
         } catch (err) {
           // If endpoint fails, just continue without OIDC providers
           console.warn("Could not load OIDC providers:", err);
@@ -120,6 +124,13 @@ function LoginPage() {
 
   // Auto-select first available tab when auth methods are loaded
   useEffect(() => {
+    console.log("[Login] Auth methods state:", authMethods);
+    console.log("[Login] OIDC providers count:", oidcProviders.length);
+    console.log(
+      "[Login] Should show SSO tab:",
+      authMethods.oauth2 && oidcProviders.length > 0,
+    );
+
     if (activeTab === null) {
       if (authMethods.password) {
         setActiveTab("email");
@@ -131,7 +142,7 @@ function LoginPage() {
         setActiveTab("oidc");
       }
     }
-  }, [authMethods, activeTab]);
+  }, [authMethods, activeTab, oidcProviders]);
 
   // Show loading while checking setup
   if (checkingSetup) {
