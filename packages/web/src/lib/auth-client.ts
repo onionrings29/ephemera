@@ -16,13 +16,6 @@ export const authClient = createAuthClient({
     credentials: "include",
   },
   plugins: [adminClient(), ssoClient()],
-  // Disable session caching to prevent stale data after OIDC redirect
-  // This ensures the session is always fresh, especially after SSO callbacks
-  session: {
-    cookieCache: {
-      enabled: false, // Disable cookie cache - React Query handles caching
-    },
-  },
 });
 
 // Export hooks for use in components

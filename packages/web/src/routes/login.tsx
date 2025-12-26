@@ -49,10 +49,22 @@ function LoginPage() {
   const queryClient = useQueryClient();
   const { isAuthenticated, isPending } = useAuth();
 
-  // Invalidate session on mount to ensure fresh data after OIDC callback
-  // This prevents redirect loops where stale cached session shows user as not authenticated
+  // Detect OIDC callback and invalidate session only when needed
+  // This prevents redirect loops while keeping cookie cache enabled for performance
   useEffect(() => {
-    queryClient.invalidateQueries({ queryKey: ["better-auth.session"] });
+    const urlParams = new URLSearchParams(window.location.search);
+    const hasCallbackParams =
+      urlParams.has("code") || urlParams.has("state") || urlParams.has("error");
+
+    // Also check if we're returning from OIDC (Better Auth sets this)
+    const isReturningFromOIDC =
+      hasCallbackParams || sessionStorage.getItem("oauth_redirect");
+
+    if (isReturningFromOIDC) {
+      // Invalidate session to ensure fresh data after OIDC callback
+      queryClient.invalidateQueries({ queryKey: ["better-auth.session"] });
+      sessionStorage.removeItem("oauth_redirect");
+    }
   }, [queryClient]);
 
   // Check if setup is complete and load OIDC providers
