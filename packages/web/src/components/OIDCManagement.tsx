@@ -202,12 +202,12 @@ function OIDCProvidersPage() {
         domain: selectedProvider.domain,
         enabled: selectedProvider.enabled,
         allowAutoProvision: selectedProvider.allowAutoProvision,
-        oidcConfig: {
-          ...selectedProvider.oidcConfig,
-          discoveryUrl:
-            selectedProvider.oidcConfig.discoveryUrl ||
-            `${fullIssuer}/.well-known/openid-configuration`,
-        },
+        clientId: selectedProvider.oidcConfig.clientId,
+        clientSecret: selectedProvider.oidcConfig.clientSecret,
+        scopes: selectedProvider.oidcConfig.scopes,
+        discoveryUrl:
+          selectedProvider.oidcConfig.discoveryUrl ||
+          `${fullIssuer}/.well-known/openid-configuration`,
       },
     });
   };

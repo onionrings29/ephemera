@@ -102,18 +102,26 @@ app.openapi(getProvidersRoute, async (c) => {
     const providers = await db.select().from(ssoProvider);
 
     return c.json(
-      providers.map((p) => ({
-        id: p.id,
-        providerId: p.providerId,
-        name: p.name || p.providerId,
-        issuer: p.issuer,
-        domain: p.domain,
-        allowAutoProvision: p.allowAutoProvision,
-        enabled: p.enabled,
-        oidcConfig: p.oidcConfig ? JSON.parse(p.oidcConfig) : null,
-        createdAt: p.createdAt.toISOString(),
-        updatedAt: p.updatedAt.toISOString(),
-      })),
+      providers.map((p) => {
+        const config = p.oidcConfig ? JSON.parse(p.oidcConfig) : null;
+        // Convert discoveryEndpoint to discoveryUrl for frontend compatibility
+        if (config && config.discoveryEndpoint) {
+          config.discoveryUrl = config.discoveryEndpoint;
+          delete config.discoveryEndpoint;
+        }
+        return {
+          id: p.id,
+          providerId: p.providerId,
+          name: p.name || p.providerId,
+          issuer: p.issuer,
+          domain: p.domain,
+          allowAutoProvision: p.allowAutoProvision,
+          enabled: p.enabled,
+          oidcConfig: config,
+          createdAt: p.createdAt.toISOString(),
+          updatedAt: p.updatedAt.toISOString(),
+        };
+      }),
       200,
     );
   } catch (error) {
@@ -255,6 +263,12 @@ app.openapi(createProviderRoute, async (c) => {
       .limit(1);
 
     const provider = created[0];
+    const config = provider.oidcConfig ? JSON.parse(provider.oidcConfig) : null;
+    // Convert discoveryEndpoint to discoveryUrl for frontend compatibility
+    if (config && config.discoveryEndpoint) {
+      config.discoveryUrl = config.discoveryEndpoint;
+      delete config.discoveryEndpoint;
+    }
 
     return c.json(
       {
@@ -265,9 +279,7 @@ app.openapi(createProviderRoute, async (c) => {
         domain: provider.domain,
         allowAutoProvision: provider.allowAutoProvision,
         enabled: provider.enabled,
-        oidcConfig: provider.oidcConfig
-          ? JSON.parse(provider.oidcConfig)
-          : null,
+        oidcConfig: config,
         createdAt: provider.createdAt.toISOString(),
         updatedAt: provider.updatedAt.toISOString(),
       },
@@ -352,7 +364,7 @@ app.openapi(updateProviderRoute, async (c) => {
       ...(body.clientId && { clientId: body.clientId }),
       ...(body.clientSecret && { clientSecret: body.clientSecret }),
       ...(body.scopes && { scopes: body.scopes }),
-      ...(body.discoveryUrl && { discoveryUrl: body.discoveryUrl }),
+      ...(body.discoveryUrl && { discoveryEndpoint: body.discoveryUrl }),
     };
 
     // Update in database
@@ -379,6 +391,14 @@ app.openapi(updateProviderRoute, async (c) => {
       .limit(1);
 
     const updatedProvider = updated[0];
+    const config = updatedProvider.oidcConfig
+      ? JSON.parse(updatedProvider.oidcConfig)
+      : null;
+    // Convert discoveryEndpoint to discoveryUrl for frontend compatibility
+    if (config && config.discoveryEndpoint) {
+      config.discoveryUrl = config.discoveryEndpoint;
+      delete config.discoveryEndpoint;
+    }
 
     return c.json(
       {
@@ -389,9 +409,7 @@ app.openapi(updateProviderRoute, async (c) => {
         domain: updatedProvider.domain,
         allowAutoProvision: updatedProvider.allowAutoProvision,
         enabled: updatedProvider.enabled,
-        oidcConfig: updatedProvider.oidcConfig
-          ? JSON.parse(updatedProvider.oidcConfig)
-          : null,
+        oidcConfig: config,
         createdAt: updatedProvider.createdAt.toISOString(),
         updatedAt: updatedProvider.updatedAt.toISOString(),
       },
@@ -528,9 +546,9 @@ app.openapi(testProviderRoute, async (c) => {
     const config = provider.oidcConfig ? JSON.parse(provider.oidcConfig) : {};
 
     // Test discovery endpoint if available
-    if (config.discoveryUrl) {
+    if (config.discoveryEndpoint) {
       try {
-        const response = await fetch(config.discoveryUrl);
+        const response = await fetch(config.discoveryEndpoint);
         if (!response.ok) {
           return c.json(
             {
