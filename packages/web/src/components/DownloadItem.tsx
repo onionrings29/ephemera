@@ -11,6 +11,7 @@ import {
   Box,
   Button,
   Modal,
+  Menu,
 } from "@mantine/core";
 import {
   IconX,
@@ -19,9 +20,11 @@ import {
   IconCheck,
   IconAlertCircle,
   IconTrash,
+  IconDownload,
   IconWorld,
   IconServer,
   IconApi,
+  IconMail,
 } from "@tabler/icons-react";
 import type { QueueItem } from "@ephemera/shared";
 import { formatDate, formatTime as formatTimeOfDay } from "@ephemera/shared";
@@ -29,8 +32,16 @@ import {
   useCancelDownload,
   useRetryDownload,
   useDeleteDownload,
+  useDownloadFile,
 } from "../hooks/useDownload";
 import { useAppSettings } from "../hooks/useSettings";
+import { useAuth, usePermissions } from "../hooks/useAuth";
+import { UserBadge } from "./UserBadge";
+import {
+  useEmailSettings,
+  useEmailRecipients,
+  useSendBookEmail,
+} from "../hooks/useEmail";
 import { useState, useEffect, memo } from "react";
 
 interface DownloadItemProps {
@@ -167,7 +178,13 @@ const DownloadItemComponent = ({ item }: DownloadItemProps) => {
   const cancelDownload = useCancelDownload();
   const retryDownload = useRetryDownload();
   const deleteDownload = useDeleteDownload();
+  const downloadFile = useDownloadFile();
   const { data: settings } = useAppSettings();
+  const { isAdmin, user } = useAuth();
+  const { data: permissions } = usePermissions();
+  const { data: emailSettings } = useEmailSettings();
+  const { data: emailRecipients } = useEmailRecipients();
+  const sendEmail = useSendBookEmail();
   const [deleteModalOpened, setDeleteModalOpened] = useState(false);
 
   const handleCancel = () => {
@@ -183,11 +200,26 @@ const DownloadItemComponent = ({ item }: DownloadItemProps) => {
     setDeleteModalOpened(false);
   };
 
+  const handleDownload = () => {
+    downloadFile.mutate({
+      md5: item.md5,
+      title: item.title,
+      format: item.format,
+      authors: item.authors,
+      year: item.year,
+      language: item.language,
+    });
+  };
+
   const canCancel = ["queued", "downloading", "delayed"].includes(item.status);
   const canDelete = ["done", "available", "error", "cancelled"].includes(
     item.status,
   );
+  const canDownload = ["done", "available"].includes(item.status);
   const showProgress = item.status === "downloading";
+
+  // Check if user has permission to delete/cancel downloads
+  const hasDeletePermission = isAdmin || permissions?.canDeleteDownloads;
 
   // Use settings for date/time formatting, fall back to defaults
   const timeFormat = settings?.timeFormat ?? "24h";
@@ -226,7 +258,7 @@ const DownloadItemComponent = ({ item }: DownloadItemProps) => {
               )}
             </div>
             <Group gap="xs">
-              {canCancel && (
+              {canCancel && hasDeletePermission && (
                 <Tooltip label="Cancel download">
                   <ActionIcon
                     color="red"
@@ -238,7 +270,128 @@ const DownloadItemComponent = ({ item }: DownloadItemProps) => {
                   </ActionIcon>
                 </Tooltip>
               )}
-              {canDelete && (
+              {canDownload && (
+                <Tooltip label="Download file">
+                  <ActionIcon
+                    color="green"
+                    variant="subtle"
+                    onClick={handleDownload}
+                    loading={downloadFile.isPending}
+                  >
+                    <IconDownload size={16} />
+                  </ActionIcon>
+                </Tooltip>
+              )}
+              {/* Email button - only show if user has recipients */}
+              {canDownload &&
+                emailSettings?.enabled &&
+                emailRecipients &&
+                emailRecipients.length === 1 &&
+                emailRecipients[0] && (
+                  // Single recipient - direct send without dropdown
+                  <Tooltip
+                    label={`Send to ${emailRecipients[0].name || emailRecipients[0].email}`}
+                  >
+                    <ActionIcon
+                      color="blue"
+                      variant="subtle"
+                      loading={sendEmail.isPending}
+                      onClick={() =>
+                        sendEmail.mutate({
+                          recipientId: emailRecipients[0]!.id,
+                          md5: item.md5,
+                        })
+                      }
+                    >
+                      <IconMail size={16} />
+                    </ActionIcon>
+                  </Tooltip>
+                )}
+              {canDownload &&
+                emailSettings?.enabled &&
+                emailRecipients &&
+                emailRecipients.length > 1 && (
+                  // Multiple recipients - show dropdown
+                  <Menu shadow="md" width={250}>
+                    <Menu.Target>
+                      <Tooltip label="Send via email">
+                        <ActionIcon
+                          color="blue"
+                          variant="subtle"
+                          loading={sendEmail.isPending}
+                        >
+                          <IconMail size={16} />
+                        </ActionIcon>
+                      </Tooltip>
+                    </Menu.Target>
+                    <Menu.Dropdown>
+                      <Menu.Label>Send to:</Menu.Label>
+                      {/* For admins: show own emails first, then divider, then others */}
+                      {isAdmin ? (
+                        <>
+                          {/* Own emails first */}
+                          {emailRecipients
+                            .filter((r) => r.userId === user?.id)
+                            .map((recipient) => (
+                              <Menu.Item
+                                key={recipient.id}
+                                onClick={() =>
+                                  sendEmail.mutate({
+                                    recipientId: recipient.id,
+                                    md5: item.md5,
+                                  })
+                                }
+                              >
+                                {recipient.name || recipient.email}
+                              </Menu.Item>
+                            ))}
+                          {/* Divider if there are other users' emails */}
+                          {emailRecipients.some((r) => r.userId !== user?.id) &&
+                            emailRecipients.some(
+                              (r) => r.userId === user?.id,
+                            ) && <Menu.Divider />}
+                          {/* Other users' emails with username */}
+                          {emailRecipients
+                            .filter((r) => r.userId !== user?.id)
+                            .map((recipient) => (
+                              <Menu.Item
+                                key={recipient.id}
+                                onClick={() =>
+                                  sendEmail.mutate({
+                                    recipientId: recipient.id,
+                                    md5: item.md5,
+                                  })
+                                }
+                              >
+                                {recipient.name || recipient.email}
+                                {recipient.userName && (
+                                  <Text span size="xs" c="dimmed" ml={4}>
+                                    ({recipient.userName})
+                                  </Text>
+                                )}
+                              </Menu.Item>
+                            ))}
+                        </>
+                      ) : (
+                        /* Regular users just see their own emails */
+                        emailRecipients.map((recipient) => (
+                          <Menu.Item
+                            key={recipient.id}
+                            onClick={() =>
+                              sendEmail.mutate({
+                                recipientId: recipient.id,
+                                md5: item.md5,
+                              })
+                            }
+                          >
+                            {recipient.name || recipient.email}
+                          </Menu.Item>
+                        ))
+                      )}
+                    </Menu.Dropdown>
+                  </Menu>
+                )}
+              {canDelete && hasDeletePermission && (
                 <Tooltip label="Delete download">
                   <ActionIcon
                     color="red"
@@ -387,17 +540,26 @@ const DownloadItemComponent = ({ item }: DownloadItemProps) => {
             </Stack>
           )}
 
-          {/* Timestamps */}
+          {/* Timestamps and user info */}
           <Group gap="md" justify="space-between">
             <Text size="xs" c="dimmed">
               Queued: {formatDate(item.queuedAt, dateFormat, timeFormat)}
             </Text>
-            {item.completedAt && (
-              <Text size="xs" c="dimmed">
-                Completed:{" "}
-                {formatDate(item.completedAt, dateFormat, timeFormat)}
-              </Text>
-            )}
+            <Group gap="xs">
+              {item.completedAt && (
+                <Text size="xs" c="dimmed">
+                  Completed:{" "}
+                  {formatDate(item.completedAt, dateFormat, timeFormat)}
+                </Text>
+              )}
+              {(isAdmin || permissions?.canSeeDownloadOwner) && item.userId && (
+                <UserBadge
+                  userId={item.userId}
+                  userName={item.userName}
+                  size="xs"
+                />
+              )}
+            </Group>
           </Group>
         </Stack>
       </Group>

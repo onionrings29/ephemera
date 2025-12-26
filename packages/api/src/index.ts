@@ -10,6 +10,23 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { initializeDatabase } from "./db/index.js";
 import { logger } from "./utils/logger.js";
+import { auth } from "./auth.js";
+import {
+  requireAuth,
+  requireAdmin,
+  requirePermission,
+} from "./middleware/auth.js";
+import { proxyAuthMiddleware } from "./middleware/proxy-auth.js";
+import type { Context, Next } from "hono";
+
+// Helper to compose auth middleware with permission/admin checks
+const withAuth = (
+  permissionCheck: (c: Context, next: Next) => Promise<Response | void>,
+) => {
+  return (c: Context, next: Next) => {
+    return requireAuth(c, (() => permissionCheck(c, next)) as Next);
+  };
+};
 import { searchCacheManager } from "./services/search-cache.js";
 import { appSettingsService } from "./services/app-settings.js";
 import { bookloreSettingsService } from "./services/booklore-settings.js";
@@ -19,6 +36,7 @@ import { bookCleanupService } from "./services/book-cleanup.js";
 import { requestCheckerService } from "./services/request-checker.js";
 import { versionService } from "./services/version.js";
 import { indexerSettingsService } from "./services/indexer-settings.js";
+import { emailSettingsService } from "./services/email-settings.js";
 import searchRoutes from "./routes/search.js";
 import downloadRoutes from "./routes/download.js";
 import queueRoutes from "./routes/queue.js";
@@ -32,6 +50,15 @@ import newznabRoutes from "./routes/newznab.js";
 import sabnzbdRoutes from "./routes/sabnzbd.js";
 import indexerRoutes from "./routes/indexer.js";
 import filesystemRoutes from "./routes/filesystem.js";
+import permissionsRoutes from "./routes/permissions.js";
+import setupRoutes from "./routes/setup.js";
+import usersRoutes from "./routes/users.js";
+import oidcProvidersRoutes from "./routes/oidc-providers.js";
+import authRoutes from "./routes/auth.js";
+import emailRoutes from "./routes/email.js";
+import systemConfigRoutes from "./routes/system-config.js";
+import apiKeysRoutes from "./routes/api-keys.js";
+import proxyAuthRoutes from "./routes/proxy-auth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -92,6 +119,9 @@ await appriseService.initializeDefaults();
 // Initialize Indexer settings with defaults
 await indexerSettingsService.getSettings();
 
+// Initialize Email settings with defaults
+await emailSettingsService.initializeDefaults();
+
 // Start Booklore token refresher service
 bookloreTokenRefresher.start();
 
@@ -120,7 +150,30 @@ app.use("*", async (c, next) => {
   // Use hono logger for all other requests
   return honoLogger()(c, next);
 });
-app.use("*", cors());
+
+// CORS configuration - allow credentials from frontend dev server and production
+app.use(
+  "*",
+  cors({
+    origin: (origin) => {
+      // Allow requests from Vite dev server and production origin
+      const allowedOrigins = [
+        "http://localhost:5222", // Vite dev server (primary)
+        "http://localhost:5223", // Vite dev server (backup port)
+        "http://localhost:8286", // Production (same origin)
+      ];
+      return allowedOrigins.includes(origin) ? origin : "http://localhost:8286";
+    },
+    credentials: true,
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization", "x-api-key"],
+  }),
+);
+
+// Proxy auth middleware - handles trusted header authentication for web routes
+// SECURITY: This middleware explicitly skips /api/* routes to prevent header auth on API endpoints
+// Only web routes (serving SPA) can use proxy header authentication
+app.use("*", proxyAuthMiddleware);
 
 // Error handling middleware
 app.onError((err, c) => {
@@ -143,6 +196,9 @@ app.get(API_BASE_PATH, (c) => {
     description: "API for searching and downloading books from AA",
     apiBasePath: API_BASE_PATH,
     endpoints: {
+      auth: `${API_BASE_PATH}/auth/*`,
+      authMethods: `${API_BASE_PATH}/auth/methods`,
+      setup: `${API_BASE_PATH}/setup/*`,
       search: `${API_BASE_PATH}/search`,
       download: `${API_BASE_PATH}/download/:md5`,
       queue: `${API_BASE_PATH}/queue`,
@@ -150,8 +206,10 @@ app.get(API_BASE_PATH, (c) => {
       stats: `${API_BASE_PATH}/stats`,
       settings: `${API_BASE_PATH}/settings`,
       requests: `${API_BASE_PATH}/requests`,
+      permissions: `${API_BASE_PATH}/permissions`,
       booklore: `${API_BASE_PATH}/booklore/*`,
       apprise: `${API_BASE_PATH}/apprise/*`,
+      email: `${API_BASE_PATH}/email/*`,
       imageProxy: `${API_BASE_PATH}/proxy/image`,
       version: `${API_BASE_PATH}/version`,
       newznab: "/newznab/api",
@@ -162,20 +220,125 @@ app.get(API_BASE_PATH, (c) => {
   });
 });
 
+// Mount Better Auth - must come before other routes that need auth
+app.on(["POST", "GET"], "/api/auth/*", (c) => {
+  return auth.handler(c.req.raw);
+});
+
+// Apply authentication middleware to protected routes
+app.use("/api/download/*", requireAuth);
+app.use("/api/queue/*", requireAuth);
+app.use("/api/requests/*", requireAuth);
+app.use("/api/permissions", requireAuth);
+
+// Settings-related routes require granular permissions (admins bypass via requirePermission)
+app.use(
+  "/api/booklore/*",
+  withAuth((c, next) => requirePermission("canConfigureIntegrations")(c, next)),
+);
+app.use(
+  "/api/apprise/*",
+  withAuth((c, next) =>
+    requirePermission("canConfigureNotifications")(c, next),
+  ),
+);
+app.use(
+  "/api/indexer/*",
+  withAuth((c, next) => requirePermission("canConfigureIntegrations")(c, next)),
+);
+// Email routes: recipients are user-managed, settings require permission
+app.use("/api/email/*", (c, next) => {
+  const path = c.req.path;
+  const method = c.req.method;
+  // Recipients routes - any authenticated user can manage their own
+  if (path.includes("/recipients") || path === "/api/email/send") {
+    return requireAuth(c, next);
+  }
+  // GET settings is allowed for all (to check if email is enabled)
+  if (path === "/api/email/settings" && method === "GET") {
+    return requireAuth(c, next);
+  }
+  // PUT settings and test require canConfigureEmail permission
+  return withAuth((c, next) => requirePermission("canConfigureEmail")(c, next))(
+    c,
+    next,
+  );
+});
+
+// General settings require canConfigureApp permission
+app.use(
+  "/api/settings/*",
+  withAuth((c, next) => requirePermission("canConfigureApp")(c, next)),
+);
+app.use(
+  "/api/system-config",
+  withAuth((c, next) => requirePermission("canConfigureApp")(c, next)),
+);
+app.use(
+  "/api/filesystem/*",
+  withAuth((c, next) => requireAdmin(c, next)),
+);
+// Users: /me endpoints are for any authenticated user, others require admin
+app.use("/api/users/*", (c, next) => {
+  const path = c.req.path;
+  // Allow /me endpoints for any authenticated user
+  if (path === "/api/users/me" || path.startsWith("/api/users/me/")) {
+    return requireAuth(c, next);
+  }
+  // All other user routes require admin
+  return withAuth((c, next) => requireAdmin(c, next))(c, next);
+});
+// OIDC providers: GET is public (for login page), POST/PATCH/DELETE require admin
+app.use("/api/oidc-providers", (c, next) => {
+  if (c.req.method === "GET") {
+    return next(); // Public read for login page
+  }
+  // Apply auth first, then admin check
+  return withAuth((c, next) => requireAdmin(c, next))(c, next);
+});
+// API Keys: require auth + canManageApiKeys permission (admin route handled in route handler)
+app.use(
+  "/api/api-keys/*",
+  withAuth((c, next) => requirePermission("canManageApiKeys")(c, next)),
+);
+app.use(
+  "/api/api-keys",
+  withAuth((c, next) => requirePermission("canManageApiKeys")(c, next)),
+);
+// Proxy auth settings: admin only (security-sensitive configuration)
+app.use(
+  "/api/settings/proxy-auth/*",
+  withAuth((c, next) => requireAdmin(c, next)),
+);
+app.use(
+  "/api/settings/proxy-auth",
+  withAuth((c, next) => requireAdmin(c, next)),
+);
+
 // Mount API routes
+app.route(`${API_BASE_PATH}/setup`, setupRoutes); // Public (for initial setup)
+app.route(`${API_BASE_PATH}/auth`, authRoutes); // Public (for login page)
+app.use(`${API_BASE_PATH}/search`, requireAuth); // Protect search endpoint
 app.route(API_BASE_PATH, searchRoutes);
-app.route(API_BASE_PATH, downloadRoutes);
-app.route(API_BASE_PATH, queueRoutes);
-app.route(API_BASE_PATH, settingsRoutes);
-app.route(API_BASE_PATH, bookloreRoutes);
-app.route(API_BASE_PATH, appriseRoutes);
-app.route(API_BASE_PATH, imageProxyRoutes);
-app.route(API_BASE_PATH, requestsRoutes);
-app.route(API_BASE_PATH, versionRoutes);
-app.route(API_BASE_PATH, indexerRoutes);
-app.route(API_BASE_PATH, filesystemRoutes);
-app.route("/newznab", newznabRoutes);
-app.route("/sabnzbd", sabnzbdRoutes);
+app.route(API_BASE_PATH, downloadRoutes); // Protected (middleware applied above)
+app.route(API_BASE_PATH, queueRoutes); // Protected
+app.route(API_BASE_PATH, settingsRoutes); // Admin only
+app.route(API_BASE_PATH, systemConfigRoutes); // Admin only
+app.route(API_BASE_PATH, bookloreRoutes); // Protected
+app.route(API_BASE_PATH, appriseRoutes); // Protected
+app.route(API_BASE_PATH, imageProxyRoutes); // Public
+app.route(API_BASE_PATH, requestsRoutes); // Protected
+app.route(API_BASE_PATH, versionRoutes); // Public
+app.route(API_BASE_PATH, indexerRoutes); // Protected
+app.route(API_BASE_PATH, filesystemRoutes); // Admin only
+app.route(API_BASE_PATH, permissionsRoutes); // Protected
+app.route(API_BASE_PATH, emailRoutes); // Protected
+app.route(`${API_BASE_PATH}/users`, usersRoutes); // Admin only
+app.route(`${API_BASE_PATH}/oidc-providers`, oidcProvidersRoutes); // Admin only
+app.route(API_BASE_PATH, apiKeysRoutes); // Protected by canManageApiKeys
+app.route(`${API_BASE_PATH}/settings/proxy-auth`, proxyAuthRoutes); // Admin only
+app.route("/newznab", newznabRoutes); // Public (has API key auth)
+app.route("/sabnzbd", sabnzbdRoutes); // Public (has API key auth)
 
 // OpenAPI documentation
 app.doc(`${API_BASE_PATH}/openapi.json`, {
@@ -222,12 +385,21 @@ app.doc(`${API_BASE_PATH}/openapi.json`, {
         "Optional Booklore integration for uploading books to your library",
     },
     {
+      name: "Email",
+      description: "Send downloaded books via email to configured recipients",
+    },
+    {
       name: "Image Proxy",
       description: "Proxy images from AA to protect client IP addresses",
     },
     {
       name: "Version",
       description: "Application version information and update checks",
+    },
+    {
+      name: "Proxy Auth",
+      description:
+        "Proxy authentication settings for reverse proxy header auth (Authelia, Authentik, etc.)",
     },
   ],
 });
