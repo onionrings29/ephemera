@@ -11,12 +11,18 @@ export const authClient = createAuthClient({
   // In production, use the same origin (frontend served from API server)
   baseURL: import.meta.env.DEV
     ? "http://localhost:8286"
-    :  
-      window.location.origin,
+    : window.location.origin,
   fetchOptions: {
     credentials: "include",
   },
   plugins: [adminClient(), ssoClient()],
+  // Disable session caching to prevent stale data after OIDC redirect
+  // This ensures the session is always fresh, especially after SSO callbacks
+  session: {
+    cookieCache: {
+      enabled: false, // Disable cookie cache - React Query handles caching
+    },
+  },
 });
 
 // Export hooks for use in components

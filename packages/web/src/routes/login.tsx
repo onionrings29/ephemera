@@ -27,6 +27,7 @@ import {
 import { signIn, authClient } from "../lib/auth-client";
 import { useAuth } from "../hooks/useAuth";
 import { apiFetch } from "@ephemera/shared";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface OIDCProvider {
   id: string;
@@ -45,7 +46,14 @@ interface AuthMethods {
 
 function LoginPage() {
   const navigate = useNavigate();
-  const { isAuthenticated } = useAuth();
+  const queryClient = useQueryClient();
+  const { isAuthenticated, isPending } = useAuth();
+
+  // Invalidate session on mount to ensure fresh data after OIDC callback
+  // This prevents redirect loops where stale cached session shows user as not authenticated
+  useEffect(() => {
+    queryClient.invalidateQueries({ queryKey: ["better-auth.session"] });
+  }, [queryClient]);
 
   // Check if setup is complete and load OIDC providers
   const [checkingSetup, setCheckingSetup] = useState(true);
@@ -142,19 +150,21 @@ function LoginPage() {
     }
   }, [authMethods, activeTab]);
 
-  // Show loading while checking setup
-  if (checkingSetup) {
+  // Show loading while checking setup or session
+  if (checkingSetup || isPending) {
     return (
       <Center h="100vh">
         <Stack align="center" gap="md">
           <Loader size="lg" />
-          <Text c="dimmed">Checking setup...</Text>
+          <Text c="dimmed">
+            {checkingSetup ? "Checking setup..." : "Verifying session..."}
+          </Text>
         </Stack>
       </Center>
     );
   }
 
-  // Redirect if already authenticated
+  // Redirect if already authenticated (only after session check is complete)
   if (isAuthenticated) {
     navigate({ to: "/" });
     return null;
