@@ -318,6 +318,14 @@ const updateProviderRoute = createRoute({
         },
       },
     },
+    400: {
+      description: "Bad request (invalid discovery document)",
+      content: {
+        "application/json": {
+          schema: z.object({ error: z.string() }),
+        },
+      },
+    },
     404: {
       description: "Provider not found",
       content: {
@@ -358,13 +366,62 @@ app.openapi(updateProviderRoute, async (c) => {
       ? JSON.parse(provider.oidcConfig)
       : {};
 
+    // If discoveryUrl is being updated, fetch new discovery document
+    let discoveryDoc = null;
+    if (
+      body.discoveryUrl &&
+      body.discoveryUrl !== currentConfig.discoveryEndpoint
+    ) {
+      try {
+        const discoveryResponse = await fetch(body.discoveryUrl);
+        if (!discoveryResponse.ok) {
+          return c.json(
+            {
+              error: `Failed to fetch discovery document: ${discoveryResponse.status}`,
+            },
+            400,
+          );
+        }
+        discoveryDoc = await discoveryResponse.json();
+
+        // Validate required endpoints exist
+        if (
+          !discoveryDoc.authorization_endpoint ||
+          !discoveryDoc.token_endpoint
+        ) {
+          return c.json(
+            {
+              error:
+                "Discovery document missing required endpoints (authorization_endpoint, token_endpoint)",
+            },
+            400,
+          );
+        }
+      } catch (error) {
+        return c.json(
+          {
+            error: `Failed to fetch discovery document: ${error instanceof Error ? error.message : String(error)}`,
+          },
+          400,
+        );
+      }
+    }
+
     // Build updated config
     const updatedConfig = {
       ...currentConfig,
       ...(body.clientId && { clientId: body.clientId }),
       ...(body.clientSecret && { clientSecret: body.clientSecret }),
       ...(body.scopes && { scopes: body.scopes }),
-      ...(body.discoveryUrl && { discoveryEndpoint: body.discoveryUrl }),
+      ...(discoveryDoc && {
+        discoveryEndpoint: body.discoveryUrl,
+        authorizationEndpoint: discoveryDoc.authorization_endpoint,
+        tokenEndpoint: discoveryDoc.token_endpoint,
+        userInfoEndpoint: discoveryDoc.userinfo_endpoint,
+        jwksEndpoint: discoveryDoc.jwks_uri,
+      }),
+      ...(!discoveryDoc &&
+        body.discoveryUrl && { discoveryEndpoint: body.discoveryUrl }),
     };
 
     // Update in database

@@ -296,6 +296,13 @@ app.use("/api/oidc-providers", (c, next) => {
   // Apply auth first, then admin check
   return withAuth((c, next) => requireAdmin(c, next))(c, next);
 });
+app.use("/api/oidc-providers/*", (c, next) => {
+  if (c.req.method === "GET") {
+    return next(); // Public read for login page
+  }
+  // Apply auth first, then admin check
+  return withAuth((c, next) => requireAdmin(c, next))(c, next);
+});
 // API Keys: require auth + canManageApiKeys permission (admin route handled in route handler)
 app.use(
   "/api/api-keys/*",

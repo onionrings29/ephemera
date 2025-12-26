@@ -38,6 +38,7 @@ interface OIDCProvider {
   name?: string;
   issuer: string;
   domain: string | null;
+  allowAutoProvision: boolean;
   enabled: boolean;
   oidcConfig: {
     clientId: string;
@@ -48,6 +49,18 @@ interface OIDCProvider {
   };
   createdAt: string;
   updatedAt: string;
+}
+
+interface UpdateOIDCProviderData {
+  name?: string;
+  issuer?: string;
+  domain?: string | null;
+  allowAutoProvision?: boolean;
+  enabled?: boolean;
+  clientId?: string;
+  clientSecret?: string;
+  scopes?: string[];
+  discoveryUrl?: string;
 }
 
 interface CreateProviderForm {
@@ -131,7 +144,7 @@ function OIDCProvidersPage() {
 
   // Update provider mutation
   const updateProviderMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<OIDCProvider> }) =>
+    mutationFn: ({ id, data }: { id: string; data: UpdateOIDCProviderData }) =>
       apiFetch<OIDCProvider>(`/oidc-providers/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -182,7 +195,13 @@ function OIDCProvidersPage() {
         issuer: selectedProvider.issuer,
         domain: selectedProvider.domain,
         enabled: selectedProvider.enabled,
-        oidcConfig: selectedProvider.oidcConfig,
+        allowAutoProvision: selectedProvider.allowAutoProvision,
+        clientId: selectedProvider.oidcConfig.clientId,
+        clientSecret: selectedProvider.oidcConfig.clientSecret,
+        scopes: selectedProvider.oidcConfig.scopes,
+        discoveryUrl:
+          selectedProvider.oidcConfig.discoveryUrl ||
+          `${selectedProvider.issuer}/.well-known/openid-configuration`,
       },
     });
   };

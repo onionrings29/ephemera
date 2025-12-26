@@ -65,6 +65,18 @@ interface CreateProviderForm {
   enabled: boolean;
 }
 
+interface UpdateOIDCProviderData {
+  name?: string;
+  issuer?: string;
+  domain?: string | null;
+  allowAutoProvision?: boolean;
+  enabled?: boolean;
+  clientId?: string;
+  clientSecret?: string;
+  scopes?: string[];
+  discoveryUrl?: string;
+}
+
 interface TestResult {
   success: boolean;
   message: string;
@@ -142,7 +154,7 @@ function OIDCProvidersPage() {
 
   // Update provider mutation
   const updateProviderMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<OIDCProvider> }) =>
+    mutationFn: ({ id, data }: { id: string; data: UpdateOIDCProviderData }) =>
       apiFetch<OIDCProvider>(`/oidc-providers/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },

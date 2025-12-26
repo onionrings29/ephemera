@@ -18,7 +18,10 @@
     "db:studio": "drizzle-kit studio",
     "db:migrate-env": "tsx src/scripts/migrate-env-to-db.ts",
     "type-check": "tsc --noEmit",
-    "clean": "rm -rf dist storage .crawlee"
+    "clean": "rm -rf dist storage .crawlee",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [
     "ephemera",
@@ -48,8 +51,10 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.5",
     "@types/nodemailer": "^7.0.4",
+    "@vitest/coverage-v8": "^2.1.8",
     "drizzle-kit": "^0.28.1",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }
