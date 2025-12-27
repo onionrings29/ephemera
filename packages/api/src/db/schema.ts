@@ -256,10 +256,8 @@ export const downloads = sqliteTable("downloads", {
   format: text("format"),
   year: integer("year"),
 
-  // User ownership
-  userId: text("user_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
+  // User ownership (nullable for migration from pre-auth versions)
+  userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
 
   // Download source tracking
   downloadSource: text("download_source", {
@@ -367,11 +365,11 @@ export const appSettings = sqliteTable("app_settings", {
   })
     .notNull()
     .default(false),
-  postDownloadDeleteTemp: integer("post_download_delete_temp", {
+  postDownloadKeepInDownloads: integer("post_download_keep_in_downloads", {
     mode: "boolean",
   })
     .notNull()
-    .default(true),
+    .default(false),
 
   // Legacy field - will be removed after migration
   postDownloadAction: text("post_download_action", {
@@ -451,10 +449,8 @@ export const books = sqliteTable("books", {
 export const downloadRequests = sqliteTable("download_requests", {
   id: integer("id").primaryKey({ autoIncrement: true }),
 
-  // User ownership
-  userId: text("user_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
+  // User ownership (nullable for migration from pre-auth versions)
+  userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
 
   // Search parameters (stores the full search query)
   queryParams: text("query_params", { mode: "json" })

@@ -1,8 +1,7 @@
 import { createMiddleware } from "hono/factory";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import type { Context, Next } from "hono";
-import crypto from "node:crypto";
-import { db } from "../db/index.js";
-import { session, type User } from "../db/schema.js";
+import type { User } from "../db/schema.js";
 import { proxyAuthSettingsService } from "../services/proxy-auth-settings.js";
 import { auth } from "../auth.js";
 
@@ -12,9 +11,9 @@ import { auth } from "../auth.js";
  * This prevents spoofing - only the configured proxy should be able to send auth headers
  */
 function getDirectConnectionIP(c: Context): string {
-  // For Hono/Node.js, get the socket remote address
-  const socket = (c.req.raw as { socket?: { remoteAddress?: string } }).socket;
-  const remoteAddress = socket?.remoteAddress || "";
+  // Use Hono's getConnInfo for proper socket access in Node.js
+  const connInfo = getConnInfo(c);
+  const remoteAddress = connInfo?.remote?.address || "";
 
   // Handle IPv6-mapped IPv4 addresses (::ffff:192.168.1.1)
   if (remoteAddress.startsWith("::ffff:")) {
@@ -22,36 +21,6 @@ function getDirectConnectionIP(c: Context): string {
   }
 
   return remoteAddress;
-}
-
-/**
- * Create a session for a user authenticated via proxy header
- * Creates a better-auth compatible session with cookie
- */
-async function createProxySession(
-  foundUser: User,
-  c: Context,
-): Promise<string> {
-  const token = crypto.randomBytes(32).toString("hex");
-  const sessionId = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-
-  await db.insert(session).values({
-    id: sessionId,
-    token,
-    userId: foundUser.id,
-    expiresAt,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    ipAddress: getDirectConnectionIP(c),
-    userAgent: c.req.header("user-agent") || null,
-  });
-
-  console.log(
-    `[Proxy Auth] Created session for user: ${foundUser.email} (${foundUser.id})`,
-  );
-
-  return token;
 }
 
 /**
@@ -63,7 +32,8 @@ async function createProxySession(
  * 3. It only authenticates pre-existing users (no auto-provisioning)
  * 4. If the header is present but invalid, it returns 401 (doesn't fall through)
  *
- * This middleware should be applied BEFORE the auth routes in the middleware chain.
+ * This middleware uses better-auth's proxy-auth plugin internally to ensure
+ * proper session creation and cookie handling.
  */
 export const proxyAuthMiddleware = createMiddleware(
   async (c: Context, next: Next) => {
@@ -140,15 +110,26 @@ export const proxyAuthMiddleware = createMiddleware(
       );
     }
 
-    // User found - create session and set cookie
+    // User found - create session using better-auth's plugin endpoint
     try {
-      const token = await createProxySession(foundUser, c);
+      // Call the proxy-auth plugin endpoint to create the session properly
+      // This uses better-auth's internal session management and cookie signing
+      const result = await auth.api.signInWithProxy({
+        body: {
+          userId: foundUser.id,
+          ipAddress: clientIP,
+          userAgent: c.req.header("user-agent") || "",
+        },
+        returnHeaders: true,
+      });
 
-      // Set the session cookie (matching better-auth's cookie settings)
-      c.header(
-        "Set-Cookie",
-        `better-auth.session_token=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 60 * 60}`,
-      );
+      // Forward the Set-Cookie headers from better-auth to our response
+      const setCookieHeaders = result.headers?.getSetCookie?.();
+      if (setCookieHeaders) {
+        for (const cookie of setCookieHeaders) {
+          c.header("Set-Cookie", cookie, { append: true });
+        }
+      }
 
       // Set user in context for downstream handlers
       c.set("user", foundUser);

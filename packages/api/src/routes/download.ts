@@ -4,6 +4,7 @@ import { queueManager } from "../services/queue-manager.js";
 import { errorResponseSchema, getErrorMessage } from "@ephemera/shared";
 import { logger } from "../utils/logger.js";
 import { downloadTracker } from "../services/download-tracker.js";
+import { permissionsService } from "../services/permissions.js";
 import { existsSync, createReadStream, statSync } from "fs";
 import { extname } from "path";
 import { stream } from "hono/streaming";
@@ -139,6 +140,22 @@ const cancelRoute = createRoute({
         },
       },
     },
+    403: {
+      description: "Forbidden - not owner and lacks permission",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    404: {
+      description: "Download not found",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
     500: {
       description: "Internal server error",
       content: {
@@ -153,8 +170,39 @@ const cancelRoute = createRoute({
 app.openapi(cancelRoute, async (c) => {
   try {
     const { md5 } = c.req.valid("param");
+    const user = c.get("user");
 
-    logger.info(`Cancel request for: ${md5}`);
+    // Get the download to check ownership
+    const download = await downloadTracker.get(md5);
+
+    if (!download) {
+      return c.json(
+        {
+          error: "Download not found",
+          details: `No download found with MD5: ${md5}`,
+        },
+        404,
+      );
+    }
+
+    // Check ownership OR permission (handle null userId for legacy downloads)
+    const isOwner = download.userId === user.id;
+    const isAdmin = user.role === "admin";
+    const hasPermission =
+      isAdmin ||
+      (await permissionsService.canPerform(user.id, "canDeleteDownloads"));
+
+    if (!isOwner && !hasPermission) {
+      return c.json(
+        {
+          error: "Forbidden",
+          message: "You can only cancel your own downloads",
+        },
+        403,
+      );
+    }
+
+    logger.info(`Cancel request for: ${md5} by user ${user.id}`);
 
     const success = await queueManager.cancelDownload(md5);
 
@@ -210,6 +258,22 @@ const deleteRoute = createRoute({
         },
       },
     },
+    403: {
+      description: "Forbidden - not owner and lacks permission",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
+    404: {
+      description: "Download not found",
+      content: {
+        "application/json": {
+          schema: errorResponseSchema,
+        },
+      },
+    },
     500: {
       description: "Server error",
       content: {
@@ -224,8 +288,39 @@ const deleteRoute = createRoute({
 app.openapi(deleteRoute, async (c) => {
   try {
     const { md5 } = c.req.valid("param");
+    const user = c.get("user");
 
-    logger.info(`Delete request for: ${md5}`);
+    // Get the download to check ownership
+    const download = await downloadTracker.get(md5);
+
+    if (!download) {
+      return c.json(
+        {
+          error: "Download not found",
+          details: `No download found with MD5: ${md5}`,
+        },
+        404,
+      );
+    }
+
+    // Check ownership OR permission (handle null userId for legacy downloads)
+    const isOwner = download.userId === user.id;
+    const isAdmin = user.role === "admin";
+    const hasPermission =
+      isAdmin ||
+      (await permissionsService.canPerform(user.id, "canDeleteDownloads"));
+
+    if (!isOwner && !hasPermission) {
+      return c.json(
+        {
+          error: "Forbidden",
+          message: "You can only delete your own downloads",
+        },
+        403,
+      );
+    }
+
+    logger.info(`Delete request for: ${md5} by user ${user.id}`);
 
     const success = await queueManager.deleteDownload(md5);
 
@@ -417,23 +512,21 @@ app.openapi(fileRoute, async (c) => {
       );
     }
 
-    // Determine which path to use
-    const filePath =
-      download.status === "available" ? download.finalPath : download.tempPath;
+    // Determine which path to use - prefer tempPath when it exists (for keepInDownloads mode)
+    let filePath: string | null = null;
 
-    if (!filePath) {
-      return c.json(
-        {
-          error: "File path not found",
-          details: "The download record does not have a file path.",
-        },
-        404,
-      );
+    // First try tempPath (always available when keepInDownloads is enabled)
+    if (download.tempPath && existsSync(download.tempPath)) {
+      filePath = download.tempPath;
+    } else if (download.finalPath && existsSync(download.finalPath)) {
+      // Fall back to finalPath
+      filePath = download.finalPath;
     }
 
-    // Check if file exists
-    if (!existsSync(filePath)) {
-      logger.error(`File not found at path: ${filePath}`);
+    if (!filePath) {
+      logger.error(
+        `File not found - tempPath: ${download.tempPath}, finalPath: ${download.finalPath}`,
+      );
       return c.json(
         {
           error: "File not found",

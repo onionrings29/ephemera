@@ -4,11 +4,56 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin, apiKey } from "better-auth/plugins";
 import { sso } from "@better-auth/sso";
 import crypto from "node:crypto";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { ssoProvider, user, account } from "./db/schema.js";
 import { booklorePlugin } from "./auth/plugins/booklore-plugin.js";
 import { calibrePlugin } from "./auth/plugins/calibre-plugin.js";
+import { proxyAuthPlugin } from "./auth/plugins/proxy-auth-plugin.js";
+
+// Get or generate persistent auth secret
+// Priority: BETTER_AUTH_SECRET env var > persisted secret file > generate new
+function getAuthSecret(): string {
+  // 1. Check environment variable first
+  if (process.env.BETTER_AUTH_SECRET) {
+    return process.env.BETTER_AUTH_SECRET;
+  }
+
+  // 2. Try to read from persisted file
+  const dbPath = process.env.DB_PATH || "./data/database.db";
+  const dataDir = dirname(dbPath);
+  const secretPath = join(dataDir, ".auth-secret");
+
+  try {
+    if (existsSync(secretPath)) {
+      const secret = readFileSync(secretPath, "utf-8").trim();
+      if (secret.length >= 32) {
+        return secret;
+      }
+    }
+  } catch {
+    // File doesn't exist or can't be read, will generate new
+  }
+
+  // 3. Generate new secret and persist it
+  const newSecret = crypto.randomBytes(32).toString("hex");
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(secretPath, newSecret, { mode: 0o600 }); // Read/write owner only
+    console.log("[Auth] Generated and persisted new auth secret");
+  } catch (error) {
+    console.warn("[Auth] Could not persist auth secret:", error);
+    console.warn(
+      "[Auth] Sessions will be invalidated on restart. Set BETTER_AUTH_SECRET env var for persistence.",
+    );
+  }
+
+  return newSecret;
+}
+
+const authSecret = getAuthSecret();
 
 // Load SSO provider IDs at startup for account linking
 // New providers added after startup will be dynamically handled via the before hook
@@ -29,19 +74,46 @@ try {
   console.log("[Auth] SSO provider table not ready, skipping provider load");
 }
 
+// Build trusted origins from environment
+// Includes: dev servers, BASE_URL, and any additional ALLOWED_ORIGINS
+function buildTrustedOrigins(): string[] {
+  const origins = new Set<string>([
+    "http://localhost:5222", // Vite dev server (primary)
+    "http://localhost:5223", // Vite dev server (backup port)
+    "http://localhost:8286", // Default production port
+  ]);
+
+  // Add BASE_URL if configured
+  if (process.env.BASE_URL) {
+    origins.add(process.env.BASE_URL);
+    // Also add without trailing slash if present
+    origins.add(process.env.BASE_URL.replace(/\/$/, ""));
+  }
+
+  // Add any additional allowed origins (comma-separated)
+  if (process.env.ALLOWED_ORIGINS) {
+    process.env.ALLOWED_ORIGINS.split(",")
+      .map((o) => o.trim())
+      .filter(Boolean)
+      .forEach((o) => origins.add(o));
+  }
+
+  return [...origins];
+}
+
+const trustedOrigins = buildTrustedOrigins();
+console.log("[Auth] Trusted origins:", trustedOrigins);
+
 export const auth = betterAuth({
   basePath: "/api/auth",
   baseURL: process.env.BASE_URL || "http://localhost:8286",
-  trustedOrigins: [
-    "http://localhost:5222", // Vite dev server (primary)
-    "http://localhost:5223", // Vite dev server (backup port)
-    "http://localhost:8286", // Production (same origin)
-  ],
+  trustedOrigins,
+  secret: authSecret,
 
   // Cookie configuration for cross-origin setup (dev) and same-origin (prod)
   cookie: {
     sameSite: "lax", // Allow cookies to be sent on redirects (critical for OIDC)
-    secure: false, // Set to true in production with HTTPS
+    secure: process.env.NODE_ENV === "production", // Require HTTPS in production
     httpOnly: true,
     path: "/",
     // Don't set domain - let browser handle it (works for both localhost and production)
@@ -129,12 +201,8 @@ export const auth = betterAuth({
     // Cookie cache disabled - causes stale session data after OIDC redirect
     // React Query's 30s cache provides sufficient performance optimization
   },
-
-  // Rate limiting
   rateLimit: {
-    enabled: true,
-    window: 60, // 1 minute
-    max: 10, // 10 requests per minute
+    enabled: false,
   },
 
   // Advanced configuration
@@ -228,6 +296,9 @@ export const auth = betterAuth({
     // Custom credential plugins
     booklorePlugin,
     calibrePlugin,
+
+    // Proxy authentication plugin (for reverse proxy header auth)
+    proxyAuthPlugin(),
 
     // SSO plugin for database-stored OIDC providers
     sso({
