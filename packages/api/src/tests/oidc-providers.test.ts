@@ -24,9 +24,7 @@ describe("OIDC Providers API", () => {
   };
 
   beforeEach(async () => {
-    // Clean up database before each test
-    await db.delete(ssoProvider).execute();
-
+    // Database cleanup is handled in global setup
     // Reset fetch mock
     vi.mocked(fetch).mockReset();
   });
